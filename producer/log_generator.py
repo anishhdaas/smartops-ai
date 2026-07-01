@@ -13,8 +13,9 @@ import random
 import signal
 import sys
 import time
+from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Deque
 
 from faker import Faker
 
@@ -55,6 +56,7 @@ REQUIRED_FIELDS = {
 
 fake = Faker()
 shutdown_requested = False
+pending_correlations: Deque[dict[str, Any]] = deque()
 
 
 def request_shutdown(signum: int, _frame: Any) -> None:
@@ -135,6 +137,9 @@ def generate_api_latency(now: datetime, correlated_server: str | None = None) ->
         endpoint=random.choice(["/api/orders", "/api/inventory", "/api/users", "/api/health"]),
         metadata={"threshold_ms": 800, "p95_ms": round(latency_ms * random.uniform(0.85, 1.15), 1)},
     )
+    if correlated_server:
+        event["metadata"]["correlated_with"] = correlated_server
+        event["metadata"]["correlation"] = "cpu_spike_to_api_latency"
     return event
 
 
@@ -185,8 +190,17 @@ def validate_event(event: dict[str, Any]) -> None:
         raise ValueError(f"Generated event missing required fields: {sorted(missing)}")
 
 
+def queue_correlated_latency_event(cpu_event: dict[str, Any], now: datetime) -> None:
+    """Queue a follow-on API latency event caused by a CPU spike."""
+    correlated_at = now + timedelta(seconds=random.randint(5, 90))
+    pending_correlations.append(generate_api_latency(correlated_at, correlated_server=cpu_event["server_id"]))
+
+
 def generate_event(now: datetime) -> dict[str, Any]:
     """Generate one realistic synthetic event with operational patterns."""
+    if pending_correlations and random.random() < 0.4:
+        return pending_correlations.popleft()
+
     if is_recurring_failure_window(now) and random.random() < 0.65:
         event_type = random.choice(["auth_failure", "db_error"])
     else:
@@ -196,8 +210,7 @@ def generate_event(now: datetime) -> dict[str, Any]:
 
     # Correlation pattern: CPU pressure often causes API latency soon after.
     if event_type == "cpu_spike" and random.random() < 0.35:
-        correlated_at = now + timedelta(seconds=random.randint(5, 90))
-        return generate_api_latency(correlated_at, correlated_server=event["server_id"])
+        queue_correlated_latency_event(event, now)
 
     return event
 
@@ -214,7 +227,7 @@ def run() -> int:
         while events_sent < TOTAL_EVENTS and not shutdown_requested:
             event = generate_event(logical_time)
             validate_event(event)
-            print(json.dumps(event, separators=(",", ": ")), flush=False)
+            print(json.dumps(event, separators=(",", ":")), flush=False)
 
             events_sent += 1
             logical_time += timedelta(seconds=SECONDS_PER_EVENT)
