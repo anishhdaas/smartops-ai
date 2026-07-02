@@ -3,7 +3,6 @@ version: 1.0.0
 config-version: 2
 
 profile: smartops_incidents
-profiles-dir: ~/.dbt
 
 model-paths:
   - models
@@ -26,7 +25,6 @@ clean-targets:
 models:
   smartops_incidents:
     +materialized: view
-    +snowflake_warehouse: compute_wh
 
 vars:
   data_env: dev

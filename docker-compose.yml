@@ -133,6 +133,7 @@ services:
     <<: *smartops-app
     container_name: smartops-dbt-runner
     restart: unless-stopped
+    working_dir: /app/dbt
     environment:
       SNOWFLAKE_USER: ${SNOWFLAKE_USER}
       SNOWFLAKE_PASSWORD: ${SNOWFLAKE_PASSWORD}
@@ -162,7 +163,7 @@ services:
               client_session_keep_alive: false
         EOF
         while true; do
-          dbt run --project-dir /app/dbt --profiles-dir /app/.dbt 2>&1 | tee -a /app/logs/dbt-runner.log
+          dbt run --profiles-dir /app/.dbt 2>&1 | tee -a /app/logs/dbt-runner.log
           sleep "$${DBT_RUN_INTERVAL_SECONDS:-900}"
         done
     volumes:
