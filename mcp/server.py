@@ -2,7 +2,7 @@
 """Read-only incident intelligence MCP-style tool server.
 
 The module exposes callable tools and a simple JSON-over-stdin/stdout loop for
-Claude/MCP integration wrappers.
+OpenRouter-enabled MCP integration wrappers.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any, Callable
 
+import requests
 import snowflake.connector
 from kafka import KafkaConsumer, TopicPartition
 from kafka.errors import KafkaError
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 30
 RUNBOOK_DIR = Path("docs/runbooks")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "qwen/qwen3-32b:free"
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw_incidents")
 KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "validation_group")
@@ -78,6 +82,20 @@ def _fetch_all(sql: str, params: dict[str, Any] | None = None) -> list[dict[str,
     return rows
 
 
+def _openrouter_generate(prompt: str) -> str:
+    response = requests.post(
+        OPENROUTER_API_URL,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={"model": OPENROUTER_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2},
+        timeout=TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+
 def query_incidents(region: str, event_type: str, date_range: str) -> list[dict[str, Any]]:
     """Return incidents by region, event type, and date range such as '7 days'."""
     sql = """
@@ -119,14 +137,22 @@ def get_incident_history(server_id: str, days: int) -> list[dict[str, Any]]:
 
 
 def suggest_runbook(issue_type: str) -> dict[str, str]:
-    """Retrieve a matching runbook from docs/runbooks/."""
+    """Retrieve a matching runbook from docs/runbooks/ and optionally summarize it with OpenRouter."""
     safe_issue_type = "".join(ch for ch in issue_type.lower() if ch.isalnum() or ch in {"_", "-"})
     candidates = [RUNBOOK_DIR / f"{safe_issue_type}.md", RUNBOOK_DIR / f"{safe_issue_type}.txt"]
     for path in candidates:
         if path.exists() and path.is_file():
             content = path.read_text(encoding="utf-8")
+            summary = None
+            try:
+                summary = _run_with_timeout(
+                    _openrouter_generate,
+                    f"Summarize this incident runbook into concise recommended actions:\n\n{content[:8000]}",
+                )
+            except Exception as exc:
+                logger.warning("OpenRouter runbook summary unavailable: %s", exc)
             logger.info("Runbook returned for issue_type=%s path=%s", issue_type, path)
-            return {"issue_type": issue_type, "path": str(path), "content": content}
+            return {"issue_type": issue_type, "path": str(path), "content": content, "ai_summary": summary or ""}
     raise FileNotFoundError(f"No runbook found for issue_type={issue_type}")
 
 
@@ -143,10 +169,7 @@ def kafka_health_check() -> dict[str, Any]:
             partitions = consumer.partitions_for_topic(KAFKA_TOPIC) or set()
             topic_partitions = [TopicPartition(KAFKA_TOPIC, partition) for partition in partitions]
             end_offsets = consumer.end_offsets(topic_partitions) if topic_partitions else {}
-            committed_offsets = {
-                tp: consumer.committed(tp) or 0
-                for tp in topic_partitions
-            }
+            committed_offsets = {tp: consumer.committed(tp) or 0 for tp in topic_partitions}
             lag = sum(end_offsets.get(tp, 0) - committed_offsets.get(tp, 0) for tp in topic_partitions)
             result = {
                 "broker_status": "available",
