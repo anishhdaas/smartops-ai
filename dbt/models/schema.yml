@@ -1,0 +1,346 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Landing zone populated by the Kafka validation consumer. It contains valid incident records and dead-letter records for validation failures.
+    database: incident_warehouse
+    schema: raw
+    freshness:
+      warn_after:
+        count: 2
+        period: hour
+    loaded_at_field: ingested_at
+    tables:
+      - name: incidents
+        description: Raw valid infrastructure incident events loaded from Kafka. Records include event metadata, optional metric fields, and ingestion timestamps in UTC.
+        columns:
+          - name: incident_id
+            data_type: varchar
+            description: Unique identifier for the incident record.
+            tests:
+              - unique
+              - not_null
+          - name: timestamp
+            data_type: timestamp_ntz
+            description: UTC timestamp when the incident occurred.
+            tests:
+              - not_null
+          - name: server_id
+            data_type: varchar
+            description: Server identifier that emitted the event, such as APP-001.
+            tests:
+              - not_null
+          - name: region
+            data_type: varchar
+            description: Geographic region where the incident occurred.
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['Bangalore', 'Singapore', 'Tokyo']
+          - name: event_type
+            data_type: varchar
+            description: Type of infrastructure incident.
+            tests:
+              - not_null
+          - name: severity
+            data_type: varchar
+            description: Incident severity level.
+            tests:
+              - not_null
+              - accepted_values:
+                  values: ['INFO', 'WARNING', 'CRITICAL']
+          - name: cpu_percent
+            data_type: float
+            description: CPU utilization percentage for CPU-related events.
+          - name: memory_percent
+            data_type: float
+            description: Memory utilization percentage for memory-related events.
+          - name: api_latency_ms
+            data_type: float
+            description: API latency in milliseconds for API latency events.
+          - name: metadata
+            data_type: variant
+            description: Event-specific JSON metadata.
+          - name: ingested_at
+            data_type: timestamp_ntz
+            description: UTC timestamp when Snowflake ingested the record.
+            tests:
+              - not_null
+
+      - name: invalid_incidents
+        description: Dead-letter table for invalid infrastructure incident events rejected by validation. Records are retained for replay, debugging, and quality monitoring.
+        columns:
+          - name: incident_id
+            data_type: varchar
+            description: Unique identifier for the invalid incident record.
+            tests:
+              - unique
+              - not_null
+          - name: timestamp
+            data_type: timestamp_ntz
+            description: UTC event timestamp when present and parseable.
+          - name: server_id
+            data_type: varchar
+            description: Server identifier when present in the invalid event.
+          - name: region
+            data_type: varchar
+            description: Region value supplied by the invalid event.
+          - name: event_type
+            data_type: varchar
+            description: Event type supplied by the invalid event.
+          - name: severity
+            data_type: varchar
+            description: Severity value supplied by the invalid event.
+          - name: cpu_percent
+            data_type: float
+            description: CPU utilization percentage when present.
+          - name: memory_percent
+            data_type: float
+            description: Memory utilization percentage when present.
+          - name: api_latency_ms
+            data_type: float
+            description: API latency in milliseconds when present.
+          - name: metadata
+            data_type: variant
+            description: Original metadata or validation context as JSON.
+          - name: ingested_at
+            data_type: timestamp_ntz
+            description: UTC timestamp when Snowflake ingested the invalid record.
+            tests:
+              - not_null
+
+models:
+  - name: stg_incidents
+    description: Deduplicated view of raw infrastructure incidents, keeping the latest ingestion per incident ID. Adds date, hour, and normalized region fields for downstream transformations.
+    versions:
+      - v: 1
+    columns:
+      - name: incident_id
+        data_type: varchar
+        description: Unique incident identifier from the raw source.
+        tests:
+          - unique
+          - not_null
+      - name: incident_timestamp
+        data_type: timestamp_ntz
+        description: UTC timestamp when the incident occurred.
+        tests:
+          - not_null
+      - name: incident_date
+        data_type: date
+        description: UTC calendar date derived from the incident timestamp.
+        tests:
+          - not_null
+      - name: incident_hour
+        data_type: integer
+        description: UTC hour of day derived from the incident timestamp.
+        tests:
+          - not_null
+      - name: server_id
+        data_type: varchar
+        description: Server identifier that emitted the incident.
+        tests:
+          - not_null
+      - name: region
+        data_type: varchar
+        description: Original region value from the raw incident.
+        tests:
+          - not_null
+      - name: region_clean
+        data_type: varchar
+        description: Trimmed and normalized region name used for dimension joins.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_regions')
+              field: region_name
+      - name: event_type
+        data_type: varchar
+        description: Infrastructure event type.
+        tests:
+          - not_null
+      - name: severity
+        data_type: varchar
+        description: Incident severity level.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INFO', 'WARNING', 'CRITICAL']
+      - name: cpu_percent
+        data_type: float
+        description: CPU utilization percentage when available.
+      - name: memory_percent
+        data_type: float
+        description: Memory utilization percentage when available.
+      - name: api_latency_ms
+        data_type: float
+        description: API latency in milliseconds when available.
+      - name: metadata
+        data_type: variant
+        description: Event-specific metadata as JSON.
+      - name: ingested_at
+        data_type: timestamp_ntz
+        description: UTC timestamp when the source record was ingested.
+        tests:
+          - not_null
+
+  - name: stg_incident_metrics
+    description: Incremental staging model that aggregates WARNING and CRITICAL incidents by server and incident hour. Produces pivoted event counters for operational metric analysis.
+    versions:
+      - v: 1
+    columns:
+      - name: server_id
+        data_type: varchar
+        description: Server identifier for the hourly metric aggregate.
+        tests:
+          - not_null
+      - name: incident_hour
+        data_type: integer
+        description: UTC hour of day for the aggregate.
+        tests:
+          - not_null
+      - name: cpu_spike_count
+        data_type: integer
+        description: Count of CPU spike events for the server and hour.
+        tests:
+          - not_null
+      - name: memory_spike_count
+        data_type: integer
+        description: Count of memory saturation events for the server and hour.
+        tests:
+          - not_null
+      - name: api_latency_count
+        data_type: integer
+        description: Count of API latency events for the server and hour.
+        tests:
+          - not_null
+      - name: auth_failure_count
+        data_type: integer
+        description: Count of authentication failure events for the server and hour.
+        tests:
+          - not_null
+      - name: last_ingested_at
+        data_type: timestamp_ntz
+        description: Latest source ingestion timestamp included in the aggregate.
+        tests:
+          - not_null
+
+  - name: fct_incidents
+    description: Reporting fact model combining incident details with hourly incident metrics and region keys. This table supports dashboard queries by event date, region, severity, and incident type.
+    versions:
+      - v: 1
+    columns:
+      - name: incident_id
+        data_type: varchar
+        description: Unique incident identifier for the fact row.
+        tests:
+          - unique
+          - not_null
+          - relationships:
+              to: ref('stg_incidents')
+              field: incident_id
+      - name: server_id
+        data_type: varchar
+        description: Server identifier associated with the incident.
+        tests:
+          - not_null
+      - name: region_key
+        data_type: integer
+        description: Foreign key to the region dimension.
+        tests:
+          - not_null
+          - relationships:
+              to: ref('dim_regions')
+              field: region_id
+      - name: event_date
+        data_type: date
+        description: UTC event date used for reporting and clustering.
+        tests:
+          - not_null
+      - name: severity
+        data_type: varchar
+        description: Incident severity level.
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['INFO', 'WARNING', 'CRITICAL']
+      - name: event_type
+        data_type: varchar
+        description: Infrastructure event type for the incident.
+        tests:
+          - not_null
+      - name: cpu_percent
+        data_type: float
+        description: CPU utilization percentage from the incident when available.
+      - name: memory_percent
+        data_type: float
+        description: Memory utilization percentage from the incident when available.
+      - name: api_latency_ms
+        data_type: float
+        description: API latency in milliseconds from the incident when available.
+      - name: cpu_spike_count
+        data_type: integer
+        description: Hourly CPU spike count for the same server and incident hour.
+        tests:
+          - not_null
+      - name: memory_spike_count
+        data_type: integer
+        description: Hourly memory spike count for the same server and incident hour.
+        tests:
+          - not_null
+      - name: api_latency_count
+        data_type: integer
+        description: Hourly API latency count for the same server and incident hour.
+        tests:
+          - not_null
+      - name: auth_failure_count
+        data_type: integer
+        description: Hourly authentication failure count for the same server and incident hour.
+        tests:
+          - not_null
+      - name: metadata
+        data_type: variant
+        description: Event-specific incident metadata as JSON.
+      - name: ingested_at
+        data_type: timestamp_ntz
+        description: UTC ingestion timestamp from the staged incident.
+        tests:
+          - not_null
+
+  - name: dim_regions
+    description: Region dimension containing supported SmartOps infrastructure regions and their timezones. It follows a slowly changing dimension shape with active flags and validity timestamps.
+    versions:
+      - v: 1
+    columns:
+      - name: region_id
+        data_type: integer
+        description: Stable numeric identifier for the region.
+        tests:
+          - unique
+          - not_null
+      - name: region_name
+        data_type: varchar
+        description: Human-readable region name.
+        tests:
+          - unique
+          - not_null
+          - accepted_values:
+              values: ['Bangalore', 'Singapore', 'Tokyo']
+      - name: timezone
+        data_type: varchar
+        description: IANA timezone for the region.
+        tests:
+          - not_null
+      - name: is_active
+        data_type: boolean
+        description: Indicates whether the region is currently active for reporting.
+        tests:
+          - not_null
+      - name: dbt_valid_from
+        data_type: timestamp_ntz
+        description: UTC timestamp when the dimension record became valid.
+        tests:
+          - not_null
+      - name: dbt_valid_to
+        data_type: timestamp_ntz
+        description: UTC timestamp when the dimension record stopped being valid; null for current records.
