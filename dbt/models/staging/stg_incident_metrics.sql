@@ -9,7 +9,7 @@
   )
 }}
 
-{{ doc('stg_incident_metrics') }}
+{# Hourly incident metrics aggregated per server. Counts CPU, memory, API latency, and authentication failure events for downstream fact modeling. #}
 
 with warning_incidents as (
 

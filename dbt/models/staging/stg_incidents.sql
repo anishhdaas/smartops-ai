@@ -8,7 +8,7 @@
   )
 }}
 
-{{ doc('stg_incidents') }}
+{# Deduplicated and cleaned view of raw infrastructure incidents. Keeps the latest ingestion per incident_id, normalizes region, and exposes incident_date and incident_hour for downstream models. #}
 
 with source_incidents as (
 

@@ -10,7 +10,7 @@
   )
 }}
 
-{{ doc('fct_incidents') }}
+{# Fact model joining cleaned incidents with hourly incident metrics and the region dimension. Powers dashboards by date, region, severity, and event type. #}
 
 with incidents as (
 

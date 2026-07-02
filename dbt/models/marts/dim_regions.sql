@@ -8,7 +8,7 @@
   )
 }}
 
-{{ doc('dim_regions') }}
+{# Slowly changing dimension of supported SmartOps infrastructure regions. Seeds Bangalore, Singapore, and Tokyo with their IANA timezones. #}
 
 with region_seed as (
 
