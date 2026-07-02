@@ -1,0 +1,33 @@
+name: smartops_incidents
+version: 1.0.0
+config-version: 2
+
+profile: smartops_incidents
+profiles-dir: ~/.dbt
+
+model-paths:
+  - models
+seed-paths:
+  - seeds
+test-paths:
+  - tests
+analysis-paths:
+  - analyses
+macro-paths:
+  - macros
+snapshot-paths:
+  - snapshots
+
+target-path: target
+clean-targets:
+  - target
+  - dbt_packages
+
+models:
+  smartops_incidents:
+    +materialized: view
+    +snowflake_warehouse: compute_wh
+
+vars:
+  data_env: dev
+  max_retention_days: 30
