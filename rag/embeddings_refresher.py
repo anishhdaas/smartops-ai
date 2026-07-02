@@ -66,7 +66,9 @@ def incident_summary(row: pd.Series) -> str:
 
 def pinecone_index() -> Any:
     pc = Pinecone(api_key=PINECONE_API_KEY)
-    return pc.Index(host=PINECONE_HOST or PINECONE_INDEX)
+    if PINECONE_HOST:
+        return pc.Index(host=PINECONE_HOST)
+    return pc.Index(PINECONE_INDEX)
 
 
 def upsert_to_pinecone(records: pd.DataFrame) -> None:

@@ -1,0 +1,8 @@
+pytest
+faker
+kafka-python
+snowflake-connector-python
+requests
+pinecone
+pandas
+pyarrow

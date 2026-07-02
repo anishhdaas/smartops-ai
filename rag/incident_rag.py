@@ -63,7 +63,9 @@ def _query_current_incidents() -> list[dict[str, Any]]:
 
 def _pinecone_index() -> Any:
     pc = Pinecone(api_key=PINECONE_API_KEY)
-    return pc.Index(host=PINECONE_HOST or PINECONE_INDEX)
+    if PINECONE_HOST:
+        return pc.Index(host=PINECONE_HOST)
+    return pc.Index(PINECONE_INDEX)
 
 
 def _pinecone_history(query: str, top_k: int = 5) -> list[dict[str, Any]]:
@@ -95,11 +97,11 @@ def _cache_history(query: str, top_k: int = 5) -> list[dict[str, Any]]:
     return cache.sort_values("_score", ascending=False).head(top_k).drop(columns=["_score"]).to_dict("records")
 
 
-def _historical_context(query: str) -> tuple[list[dict[str, Any]], str | None]:
+def _historical_context(query: str, top_k: int = 5) -> tuple[list[dict[str, Any]], str | None]:
     try:
-        return _pinecone_history(query), None
+        return _pinecone_history(query, top_k=top_k), None
     except Exception as exc:
-        return _cache_history(query), f"Pinecone unavailable; skipped vector search and used local cache when available: {exc}"
+        return _cache_history(query, top_k=top_k), f"Pinecone unavailable; skipped vector search and used local cache when available: {exc}"
 
 
 def _snowflake_only_analysis(query: str, current_incidents: list[dict[str, Any]], warning: str | None) -> str:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import sys
@@ -22,10 +23,20 @@ except ImportError:
     NoBrokersAvailable = KafkaError
 
 # -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s %(name)s :: %(message)s",
+    stream=sys.stderr,
+)
+logger = logging.getLogger("smartops.kafka.consumer")
+
+# -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-KAFKA_TOPIC = "raw_incidents"
-KAFKA_CONSUMER_GROUP = "validation_group"
+KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw_incidents")
+KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "validation_group")
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 
 SNOWFLAKE_USER = os.getenv("SNOWFLAKE_USER", "")
@@ -44,7 +55,9 @@ MINIMUM_STORED_SEVERITIES = {"WARNING", "CRITICAL"}
 
 RETRY_ATTEMPTS = 3
 RETRY_BACKOFF_SECONDS = 5
-METRICS_EVERY_EVENTS = 5_000
+POLL_TIMEOUT_MS = 1_000
+MAX_POLL_RECORDS = 500
+METRICS_EVERY_EVENTS = 100
 
 shutdown_requested = False
 
@@ -53,7 +66,7 @@ def request_shutdown(signum: int, _frame: Any) -> None:
     """Request a graceful shutdown for SIGTERM/SIGINT."""
     global shutdown_requested
     shutdown_requested = True
-    print(f"Shutdown requested by signal {signum}; stopping gracefully...", file=sys.stderr)
+    logger.info("Shutdown requested by signal %s; stopping gracefully...", signum)
 
 
 def json_deserializer(raw: bytes) -> dict[str, Any]:
@@ -70,21 +83,32 @@ def create_consumer() -> KafkaConsumer:
 
     for attempt in range(1, RETRY_ATTEMPTS + 1):
         try:
-            return KafkaConsumer(
+            consumer = KafkaConsumer(
                 KAFKA_TOPIC,
                 bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS.split(","),
                 group_id=KAFKA_CONSUMER_GROUP,
                 enable_auto_commit=False,
                 auto_offset_reset="earliest",
                 value_deserializer=json_deserializer,
-                consumer_timeout_ms=1_000,
-                max_poll_records=500,
+                max_poll_records=MAX_POLL_RECORDS,
+                session_timeout_ms=30_000,
+                heartbeat_interval_ms=10_000,
+                request_timeout_ms=40_000,
             )
+            logger.info(
+                "Kafka connected: brokers=%s topic=%s group=%s",
+                KAFKA_BOOTSTRAP_SERVERS,
+                KAFKA_TOPIC,
+                KAFKA_CONSUMER_GROUP,
+            )
+            return consumer
         except (NoBrokersAvailable, KafkaError) as exc:
             last_error = exc
-            print(
-                f"Kafka unavailable on attempt {attempt}/{RETRY_ATTEMPTS}: {exc}",
-                file=sys.stderr,
+            logger.warning(
+                "Kafka unavailable on attempt %s/%s: %s",
+                attempt,
+                RETRY_ATTEMPTS,
+                exc,
             )
             if attempt < RETRY_ATTEMPTS:
                 time.sleep(RETRY_BACKOFF_SECONDS * attempt)
@@ -94,13 +118,20 @@ def create_consumer() -> KafkaConsumer:
 
 def create_snowflake_connection() -> snowflake.connector.SnowflakeConnection:
     """Create a Snowflake connection from environment variables."""
-    return snowflake.connector.connect(
+    connection = snowflake.connector.connect(
         user=SNOWFLAKE_USER,
         password=SNOWFLAKE_PASSWORD,
         account=SNOWFLAKE_ACCOUNT,
         database=SNOWFLAKE_DATABASE,
         schema=SNOWFLAKE_SCHEMA,
     )
+    logger.info(
+        "Snowflake connected: account=%s database=%s schema=%s",
+        SNOWFLAKE_ACCOUNT,
+        SNOWFLAKE_DATABASE,
+        SNOWFLAKE_SCHEMA,
+    )
+    return connection
 
 
 def validate_incident(event: dict[str, Any]) -> tuple[bool, list[str]]:
@@ -184,15 +215,15 @@ def insert_valid_incident(cursor: Any, event: dict[str, Any]) -> None:
         """,
         {
             "incident_id": str(uuid.uuid4()),
-            "timestamp": event["timestamp"],
-            "server_id": event["server_id"],
-            "region": event["region"],
-            "event_type": event["event_type"],
-            "severity": event["severity"],
+            "timestamp": event.get("timestamp"),
+            "server_id": event.get("server_id"),
+            "region": event.get("region"),
+            "event_type": event.get("event_type"),
+            "severity": event.get("severity"),
             "cpu_percent": event.get("cpu_percent"),
             "memory_percent": event.get("memory_percent"),
             "api_latency_ms": event.get("api_latency_ms"),
-            "metadata": json.dumps(event.get("metadata", {})),
+            "metadata": json.dumps(event.get("metadata") or {}),
             "ingested_at": utc_now_iso(),
         },
     )
@@ -251,8 +282,14 @@ def insert_invalid_incident(cursor: Any, event: dict[str, Any], errors: list[str
     )
 
 
-def print_metrics(processed: int, valid: int, invalid: int) -> None:
-    print(f"Processed: {processed}, Valid: {valid}, Invalid: {invalid}", flush=True)
+def log_metrics(processed: int, valid: int, invalid: int) -> None:
+    logger.info("Processed: %s, Valid: %s, Invalid: %s", processed, valid, invalid)
+
+
+def commit_offsets(consumer: KafkaConsumer, snowflake_connection: Any) -> None:
+    """Commit Snowflake transaction and Kafka offsets together."""
+    snowflake_connection.commit()
+    consumer.commit()
 
 
 def process_messages() -> int:
@@ -262,54 +299,108 @@ def process_messages() -> int:
     processed = 0
     valid = 0
     invalid = 0
+    seen_since_commit = 0
+
+    logger.info(
+        "Consumer started: topic=%s group=%s bootstrap_servers=%s",
+        KAFKA_TOPIC,
+        KAFKA_CONSUMER_GROUP,
+        KAFKA_BOOTSTRAP_SERVERS,
+    )
 
     try:
         with snowflake_connection.cursor() as cursor:
             while not shutdown_requested:
-                for message in consumer:
-                    event = message.value
-                    processed += 1
+                batches = consumer.poll(timeout_ms=POLL_TIMEOUT_MS, max_records=MAX_POLL_RECORDS)
+                if not batches:
+                    continue
 
-                    is_valid, validation_errors = validate_incident(event)
-                    if is_valid and should_store_valid_event(event):
-                        insert_valid_incident(cursor, event)
-                        valid += 1
-                    elif is_valid:
-                        # Valid INFO events are intentionally filtered out and not stored.
-                        valid += 1
-                    else:
-                        insert_invalid_incident(cursor, event, validation_errors)
-                        invalid += 1
+                for _tp, records in batches.items():
+                    for message in records:
+                        if shutdown_requested:
+                            break
+                        event = message.value
+                        processed += 1
+                        seen_since_commit += 1
 
-                    if processed % METRICS_EVERY_EVENTS == 0:
-                        snowflake_connection.commit()
-                        consumer.commit()
-                        print_metrics(processed, valid, invalid)
+                        logger.info(
+                            "Received event: partition=%s offset=%s key=%s",
+                            message.partition,
+                            message.offset,
+                            message.key,
+                        )
+
+                        is_valid, validation_errors = validate_incident(event)
+                        try:
+                            if is_valid and should_store_valid_event(event):
+                                insert_valid_incident(cursor, event)
+                                valid += 1
+                                logger.info(
+                                    "Valid event stored: server_id=%s event_type=%s severity=%s",
+                                    event.get("server_id"),
+                                    event.get("event_type"),
+                                    event.get("severity"),
+                                )
+                            elif is_valid:
+                                # Valid INFO events are intentionally filtered out and not stored.
+                                valid += 1
+                                logger.info(
+                                    "Valid event filtered (below WARNING): server_id=%s severity=%s",
+                                    event.get("server_id"),
+                                    event.get("severity"),
+                                )
+                            else:
+                                insert_invalid_incident(cursor, event, validation_errors)
+                                invalid += 1
+                                logger.warning(
+                                    "Invalid event: errors=%s payload=%s",
+                                    validation_errors,
+                                    event,
+                                )
+                            logger.info("Snowflake insert succeeded: offset=%s", message.offset)
+                        except Exception as exc:
+                            snowflake_connection.rollback()
+                            logger.exception(
+                                "Snowflake insert failed: offset=%s error=%s payload=%s",
+                                message.offset,
+                                exc,
+                                event,
+                            )
+                            raise
+
+                        if seen_since_commit >= METRICS_EVERY_EVENTS:
+                            commit_offsets(consumer, snowflake_connection)
+                            seen_since_commit = 0
+                            log_metrics(processed, valid, invalid)
 
                     if shutdown_requested:
                         break
 
-                if shutdown_requested:
-                    break
-
-            snowflake_connection.commit()
-            consumer.commit()
-            print_metrics(processed, valid, invalid)
+            commit_offsets(consumer, snowflake_connection)
+            log_metrics(processed, valid, invalid)
     finally:
-        consumer.close()
-        snowflake_connection.close()
+        try:
+            consumer.close()
+        finally:
+            snowflake_connection.close()
 
     return 0
 
 
 def main() -> int:
+    logger.info(
+        "Starting SmartOps Kafka consumer: topic=%s group=%s bootstrap_servers=%s",
+        KAFKA_TOPIC,
+        KAFKA_CONSUMER_GROUP,
+        KAFKA_BOOTSTRAP_SERVERS,
+    )
     signal.signal(signal.SIGINT, request_shutdown)
     signal.signal(signal.SIGTERM, request_shutdown)
 
     try:
         return process_messages()
     except Exception as exc:
-        print(f"Consumer failed: {exc}", file=sys.stderr)
+        logger.exception("Consumer failed: %s", exc)
         return 1
 
 

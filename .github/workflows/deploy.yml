@@ -1,0 +1,115 @@
+name: SmartOps AI Deploy
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  validate-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Validate required secrets
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+          SNOWFLAKE_ACCOUNT: ${{ secrets.SNOWFLAKE_ACCOUNT }}
+          PINECONE_API_KEY: ${{ secrets.PINECONE_API_KEY }}
+          PINECONE_HOST: ${{ secrets.PINECONE_HOST }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in \
+            OPENROUTER_API_KEY \
+            SNOWFLAKE_USER \
+            SNOWFLAKE_PASSWORD \
+            SNOWFLAKE_ACCOUNT \
+            PINECONE_API_KEY \
+            PINECONE_HOST
+          do
+            if [ -z "${!name:-}" ]; then
+              echo "::error title=Missing secret::${name} is required"
+              missing=1
+            else
+              printf '%s: configured\n' "${name}"
+            fi
+          done
+          exit "${missing}"
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install \
+            -r producer/requirements.txt \
+            -r kafka/requirements_consumer.txt \
+            -r rag/requirements_rag.txt \
+            -r mcp/requirements.txt \
+            dbt-snowflake \
+            great-expectations \
+            pyarrow \
+            pytest
+
+      - name: Run syntax checks
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          python -m py_compile \
+            producer/log_generator.py \
+            kafka/consumer.py \
+            rag/incident_rag.py \
+            rag/embeddings_refresher.py \
+            mcp/server.py \
+            scripts/run_validations.py 2>&1 | tee logs/syntax-check.log
+          bash -n shell/start.sh shell/deploy.sh 2>&1 | tee -a logs/syntax-check.log
+
+      - name: Run pytest
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          set +e
+          pytest -q 2>&1 | tee logs/pytest.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "${status}" -eq 5 ]; then
+            echo "No pytest tests collected." | tee -a logs/pytest.log
+            exit 0
+          fi
+          exit "${status}"
+
+      - name: Build Docker image
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          docker build -t smartops-ai:ci . 2>&1 | tee logs/docker-build.log
+
+      - name: Validate Docker Compose config
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          docker compose config >/tmp/smartops-compose.yml 2>logs/docker-compose-config.log
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smartops-ai-failure-logs
+          path: |
+            logs/
+            /tmp/smartops-compose.yml
+          if-no-files-found: ignore
