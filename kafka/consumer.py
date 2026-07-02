@@ -8,12 +8,18 @@ import os
 import signal
 import sys
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import snowflake.connector
 from kafka import KafkaConsumer
-from kafka.errors import KafkaError, NoBrokersAvailable
+from kafka.errors import KafkaError
+
+try:
+    from kafka.errors import NoBrokersAvailable
+except ImportError:
+    NoBrokersAvailable = KafkaError
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -134,49 +140,112 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def snowflake_timestamp_or_none(value: Any) -> str | None:
+    """Return a Snowflake-friendly timestamp string only when it is parseable."""
+    if value is None:
+        return None
+    try:
+        datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return str(value)
+
+
 def insert_valid_incident(cursor: Any, event: dict[str, Any]) -> None:
     """Insert a validated incident into Snowflake."""
     cursor.execute(
         f"""
         INSERT INTO {VALID_INCIDENT_TABLE}
-            (timestamp, server_id, event_type, severity, region, metadata, raw_event, ingested_at)
+            (
+                incident_id,
+                timestamp,
+                server_id,
+                region,
+                event_type,
+                severity,
+                cpu_percent,
+                memory_percent,
+                api_latency_ms,
+                metadata,
+                ingested_at
+            )
         SELECT
+            %(incident_id)s,
             %(timestamp)s,
             %(server_id)s,
+            %(region)s,
             %(event_type)s,
             %(severity)s,
-            %(region)s,
+            %(cpu_percent)s,
+            %(memory_percent)s,
+            %(api_latency_ms)s,
             PARSE_JSON(%(metadata)s),
-            PARSE_JSON(%(raw_event)s),
             %(ingested_at)s
         """,
         {
+            "incident_id": str(uuid.uuid4()),
             "timestamp": event["timestamp"],
             "server_id": event["server_id"],
+            "region": event["region"],
             "event_type": event["event_type"],
             "severity": event["severity"],
-            "region": event["region"],
+            "cpu_percent": event.get("cpu_percent"),
+            "memory_percent": event.get("memory_percent"),
+            "api_latency_ms": event.get("api_latency_ms"),
             "metadata": json.dumps(event.get("metadata", {})),
-            "raw_event": json.dumps(event),
             "ingested_at": utc_now_iso(),
         },
     )
 
 
-def insert_invalid_incident(cursor: Any, raw_event: Any, errors: list[str]) -> None:
+def insert_invalid_incident(cursor: Any, event: dict[str, Any], errors: list[str]) -> None:
     """Insert an invalid incident into the Snowflake dead-letter table."""
     cursor.execute(
         f"""
         INSERT INTO {INVALID_INCIDENT_TABLE}
-            (raw_event, validation_errors, ingested_at)
+            (
+                incident_id,
+                timestamp,
+                server_id,
+                region,
+                event_type,
+                severity,
+                cpu_percent,
+                memory_percent,
+                api_latency_ms,
+                metadata,
+                ingested_at
+            )
         SELECT
-            PARSE_JSON(%(raw_event)s),
-            PARSE_JSON(%(validation_errors)s),
+            %(incident_id)s,
+            %(timestamp)s,
+            %(server_id)s,
+            %(region)s,
+            %(event_type)s,
+            %(severity)s,
+            %(cpu_percent)s,
+            %(memory_percent)s,
+            %(api_latency_ms)s,
+            PARSE_JSON(%(metadata)s),
             %(ingested_at)s
         """,
         {
-            "raw_event": json.dumps(raw_event),
-            "validation_errors": json.dumps(errors),
+            "incident_id": str(uuid.uuid4()),
+            "timestamp": snowflake_timestamp_or_none(event.get("timestamp")),
+            "server_id": event.get("server_id"),
+            "region": event.get("region"),
+            "event_type": event.get("event_type"),
+            "severity": event.get("severity"),
+            "cpu_percent": event.get("cpu_percent"),
+            "memory_percent": event.get("memory_percent"),
+            "api_latency_ms": event.get("api_latency_ms"),
+            "metadata": json.dumps(
+                {
+                    "validation_errors": errors,
+                    "payload": event,
+                    "metadata": event.get("metadata") if isinstance(event, dict) else None,
+                }
+            ),
             "ingested_at": utc_now_iso(),
         },
     )
@@ -198,18 +267,18 @@ def process_messages() -> int:
         with snowflake_connection.cursor() as cursor:
             while not shutdown_requested:
                 for message in consumer:
-                    raw_event = message.value
+                    event = message.value
                     processed += 1
 
-                    is_valid, validation_errors = validate_incident(raw_event)
-                    if is_valid and should_store_valid_event(raw_event):
-                        insert_valid_incident(cursor, raw_event)
+                    is_valid, validation_errors = validate_incident(event)
+                    if is_valid and should_store_valid_event(event):
+                        insert_valid_incident(cursor, event)
                         valid += 1
                     elif is_valid:
                         # Valid INFO events are intentionally filtered out and not stored.
                         valid += 1
                     else:
-                        insert_invalid_incident(cursor, raw_event, validation_errors)
+                        insert_invalid_incident(cursor, event, validation_errors)
                         invalid += 1
 
                     if processed % METRICS_EVERY_EVENTS == 0:

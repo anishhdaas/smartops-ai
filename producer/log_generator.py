@@ -127,15 +127,15 @@ def generate_memory_full(now: datetime) -> dict[str, Any]:
 
 
 def generate_api_latency(now: datetime, correlated_server: str | None = None) -> dict[str, Any]:
-    latency_ms = round(random.uniform(250.0, 5_000.0), 1)
+    api_latency_ms = round(random.uniform(250.0, 5_000.0), 1)
     event = base_event(now, "api_latency", "API")
     if correlated_server:
         event["server_id"] = correlated_server.replace("APP", "API", 1)
     event.update(
-        severity=severity_from_metric(latency_ms, warning=800.0, critical=2_500.0),
-        latency_ms=latency_ms,
+        severity=severity_from_metric(api_latency_ms, warning=800.0, critical=2_500.0),
+        api_latency_ms=api_latency_ms,
         endpoint=random.choice(["/api/orders", "/api/inventory", "/api/users", "/api/health"]),
-        metadata={"threshold_ms": 800, "p95_ms": round(latency_ms * random.uniform(0.85, 1.15), 1)},
+        metadata={"threshold_ms": 800, "p95_ms": round(api_latency_ms * random.uniform(0.85, 1.15), 1)},
     )
     if correlated_server:
         event["metadata"]["correlated_with"] = correlated_server
