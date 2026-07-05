@@ -144,15 +144,30 @@ def validate_incident(event: dict[str, Any]) -> tuple[bool, list[str]]:
     errors: list[str] = []
     missing_fields = REQUIRED_FIELDS - set(event.keys())
     if missing_fields:
-        errors.append(f"Missing fields: {missing_fields}")
+        errors.append(f"missing required fields: {missing_fields}")
 
     if "severity" in event and event["severity"] not in VALID_SEVERITIES:
-        errors.append(f"Invalid severity: {event.get('severity')}")
+        errors.append(f"invalid severity: {event.get('severity')}")
 
     if "region" in event and event["region"] not in VALID_REGIONS:
-        errors.append(f"Invalid region: {event.get('region')}")
+        errors.append(f"invalid region: {event.get('region')}")
+
+    if "metadata" in event and not isinstance(event["metadata"], dict):
+        errors.append("metadata must be an object")
+
+    if "timestamp" in event:
+        try:
+            datetime.fromisoformat(event["timestamp"].replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            errors.append(f"invalid timestamp: {event.get('timestamp')}")
 
     return (len(errors) == 0, errors)
+
+
+def should_store_valid_event(event: dict[str, Any]) -> bool:
+    """Determine if a valid event should be stored based on severity."""
+    severity = event.get("severity", "")
+    return severity in MINIMUM_STORED_SEVERITIES
 
 
 def utc_now_string() -> str:

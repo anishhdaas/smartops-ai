@@ -17,7 +17,7 @@ from datetime import datetime, timezone, timedelta
 
 import snowflake.connector
 from snowflake.connector.errors import ProgrammingError, OperationalError
-from kafka import KafkaConsumer, KafkaAdminClient
+from kafka import KafkaConsumer, KafkaAdminClient, TopicPartition
 from kafka.admin import ConfigResource, ConfigResourceType
 from kafka.errors import KafkaError
 
@@ -39,10 +39,11 @@ SNOWFLAKE_PASSWORD = os.getenv("SNOWFLAKE_PASSWORD")
 SNOWFLAKE_ACCOUNT = os.getenv("SNOWFLAKE_ACCOUNT")
 SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH")
 SNOWFLAKE_DATABASE = os.getenv("SNOWFLAKE_DATABASE", "INCIDENT_WAREHOUSE")
-SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "RAW")
+SNOWFLAKE_SCHEMA = os.getenv("SNOWFLAKE_SCHEMA", "ANALYTICS")
+SNOWFLAKE_SOURCE_SCHEMA = os.getenv("SNOWFLAKE_SOURCE_SCHEMA", "RAW")
 SNOWFLAKE_ROLE = os.getenv("SNOWFLAKE_ROLE")
 
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS")
 KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "raw_incidents")
 KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "validation_group")
 
@@ -63,7 +64,7 @@ def get_snowflake_connection():
             account=SNOWFLAKE_ACCOUNT,
             warehouse=SNOWFLAKE_WAREHOUSE,
             database=SNOWFLAKE_DATABASE,
-            schema=SNOWFLAKE_SCHEMA,
+            schema=SNOWFLAKE_SCHEMA,  # Use ANALYTICS for metrics table
             role=SNOWFLAKE_ROLE if SNOWFLAKE_ROLE else None,
         )
         logger.debug("Snowflake connection established.")
@@ -93,8 +94,8 @@ def get_snowflake_recent_count(conn):
     try:
         with conn.cursor() as cs:
             query = f"""
-                SELECT COUNT(*) 
-                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.INCIDENTS
+                SELECT COUNT(*)
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SOURCE_SCHEMA}.INCIDENTS
                 WHERE INGESTED_AT >= DATEADD(MINUTE, -{LOOKBACK_MINUTES}, CURRENT_TIMESTAMP())
             """
             cs.execute(query)
@@ -134,16 +135,20 @@ def get_kafka_lag(admin_client):
             logger.warning("Topic %s not found.", KAFKA_TOPIC)
             consumer.close()
             return 0
-        topic_partitions = [kafka.TopicPartition(KAFKA_TOPIC, p) for p in partitions]
+        topic_partitions = [TopicPartition(KAFKA_TOPIC, p) for p in partitions]
         # Get end offsets (latest available)
         end_offsets = consumer.end_offsets(topic_partitions)
-        # Get committed offsets (if any)
-        committed = consumer.committed(topic_partitions, timeout=5000)
-        if committed is None:
+        # Get committed offsets (if any) - use the consumer's committed method
+        committed_offsets = {}
+        for tp in topic_partitions:
+            committed = consumer.committed(tp)
+            if committed is not None:
+                committed_offsets[tp] = committed
+        if not committed_offsets:
             # No committed offsets, lag is the end offset (assuming we start from beginning)
             lag = sum(end_offsets.values())
         else:
-            lag = sum(end_offsets[tp] - committed.get(tp, 0) for tp in topic_partitions)
+            lag = sum(end_offsets[tp] - committed_offsets.get(tp, 0) for tp in topic_partitions)
         consumer.close()
         logger.info("Kafka consumer lag for group %s: %s", KAFKA_CONSUMER_GROUP, lag)
         return lag
@@ -161,8 +166,8 @@ def get_average_latency(conn):
     try:
         with conn.cursor() as cs:
             query = f"""
-                SELECT AVG(DATEDIFF('second', TIMESTAMP, INGESTED_AT)) 
-                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.INCIDENTS
+                SELECT AVG(DATEDIFF('second', TIMESTAMP, INGESTED_AT))
+                FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SOURCE_SCHEMA}.INCIDENTS
                 WHERE INGESTED_AT >= DATEADD(MINUTE, -{LOOKBACK_MINUTES}, CURRENT_TIMESTAMP())
                   AND TIMESTAMP IS NOT NULL
                   AND INGESTED_AT IS NOT NULL
@@ -252,6 +257,7 @@ def main():
         ("SNOWFLAKE_USER", SNOWFLAKE_USER),
         ("SNOWFLAKE_PASSWORD", SNOWFLAKE_PASSWORD),
         ("SNOWFLAKE_ACCOUNT", SNOWFLAKE_ACCOUNT),
+        ("KAFKA_BOOTSTRAP_SERVERS", KAFKA_BOOTSTRAP_SERVERS),
     ]
     for name, value in required_env:
         if not value:

@@ -48,12 +48,13 @@ def _snowflake_connection() -> snowflake.connector.SnowflakeConnection:
 
 
 def _query_current_incidents() -> list[dict[str, Any]]:
-    sql = """
-        SELECT TOP 100 *
-        FROM fct_incidents
+    sql = f"""
+        SELECT *
+        FROM {SNOWFLAKE_DATABASE}.{SNOWFLAKE_SCHEMA}.fct_incidents_v1
         WHERE region = 'Bangalore'
           AND event_type = 'auth_failure'
         ORDER BY timestamp DESC
+        LIMIT 100
     """
     with _snowflake_connection() as conn:
         with conn.cursor(snowflake.connector.DictCursor) as cur:

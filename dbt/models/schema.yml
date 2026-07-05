@@ -5,10 +5,11 @@ sources:
     description: Landing zone populated by the Kafka validation consumer. It contains valid incident records and dead-letter records for validation failures.
     database: incident_warehouse
     schema: raw
-    freshness:
-      warn_after:
-        count: 2
-        period: hour
+    config:
+      freshness:
+        warn_after:
+          count: 2
+          period: hour
     loaded_at_field: ingested_at
     tables:
       - name: incidents

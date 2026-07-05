@@ -10,7 +10,7 @@ WORKDIR ${APP_HOME}
 RUN addgroup --system app && \
     adduser --system --ingroup app --home ${APP_HOME} app && \
     apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates git && \
     rm -rf /var/lib/apt/lists/*
 
 COPY producer/requirements.txt /tmp/requirements/producer.txt
@@ -26,7 +26,8 @@ RUN pip install --upgrade pip setuptools wheel && \
       -r /tmp/requirements/mcp.txt \
       dbt-snowflake \
       great-expectations \
-      pyarrow && \
+      pyarrow \
+      pytest && \
     rm -rf /tmp/requirements
 
 COPY --chown=app:app . ${APP_HOME}

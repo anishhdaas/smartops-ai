@@ -1,8 +1,8 @@
-{{--
+{#
   Mart table for dashboard consumption.
   Combines metrics and server information for fast querying.
   Incremental on (server_id, hour_bucket) to match the grain of fct_metrics.
---}}
+#}
 {{ config(
     materialized='incremental',
     unique_key=['server_id', 'hour_bucket'],

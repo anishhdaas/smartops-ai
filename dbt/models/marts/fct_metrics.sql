@@ -1,8 +1,8 @@
-{{--
+{#
   Fact table for server metrics aggregated by hour.
   Incremental on (server_id, hour_bucket) to avoid reprocessing.
   Clustered by server_id and hour_bucket for efficient access.
---}}
+#}
 {{ config(
     materialized='incremental',
     unique_key=['server_id', 'hour_bucket'],
@@ -23,12 +23,13 @@ select
     sum(case when severity = 'WARNING' then 1 else 0 end) as warning_count,
     sum(case when severity = 'CRITICAL' then 1 else 0 end) as critical_count
 from {{ ref('stg_events') }}
-group by
-    server_id,
-    date_trunc('hour', timestamp)
 
 {% if is_incremental() %}
   where (server_id, date_trunc('hour', timestamp)) not in (
     select server_id, hour_bucket from {{ this }}
   )
 {% endif %}
+
+group by
+    server_id,
+    date_trunc('hour', timestamp)

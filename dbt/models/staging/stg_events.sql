@@ -1,8 +1,8 @@
-{{--
+{#
   Staging model for raw events.
   Cleans and prepares the raw event data for downstream models.
   Incremental on (incident_id, timestamp) to avoid reprocessing the same event.
---}}
+#}
 {{ config(
     materialized='incremental',
     unique_key=['incident_id', 'timestamp'],
