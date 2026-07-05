@@ -1,2 +1,16 @@
 .DS_Store
 .env
+.env.*
+!.env.example
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Backup files
+*.bak
+*.backup
+
+# macOS
+.DS_Store

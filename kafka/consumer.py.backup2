@@ -155,33 +155,25 @@ def validate_incident(event: dict[str, Any]) -> tuple[bool, list[str]]:
     return (len(errors) == 0, errors)
 
 
-def utc_now_string() -> str:
-    """Return a timestamp string in ISO format without timezone for Snowflake TIMESTAMP_NTZ."""
-    return datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def insert_valid_incidents_batch(cursor: Any, events: List[Dict[str, Any]]) -> None:
     """Insert a batch of valid incidents into Snowflake using executemany."""
     if not events:
         return
     sql = f"""
         INSERT INTO {VALID_INCIDENT_TABLE}
-            (timestamp, server_id, region, event_type, severity, cpu_percent, memory_percent, api_latency_ms, metadata, ingested_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s)
+        (event_id, event_timestamp, server_id, event_type, severity, region, metadata)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
     data = []
     for event in events:
         data.append((
+            event.get("event_id", str(uuid.uuid4())),
             event["timestamp"],
             event["server_id"],
-            event["region"],
             event["event_type"],
             event["severity"],
-            event.get("cpu_percent"),
-            event.get("memory_percent"),
-            event.get("api_latency_ms"),
-            json.dumps(event.get("metadata") or {}),
-            utc_now_string(),
+            event["region"],
+            json.dumps(event["metadata"]),
         ))
     cursor.executemany(sql, data)
 
@@ -192,32 +184,26 @@ def insert_invalid_incidents_batch(cursor: Any, events: List[Tuple[Dict[str, Any
         return
     sql = f"""
         INSERT INTO {INVALID_INCIDENT_TABLE}
-            (timestamp, server_id, region, event_type, severity, cpu_percent, memory_percent, api_latency_ms, metadata, ingested_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s)
+        (event_id, event_timestamp, server_id, event_type, severity, region, metadata, validation_errors)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
     """
     data = []
     for event, errors in events:
         data.append((
-            event.get("timestamp"),
-            event.get("server_id"),
-            event.get("region"),
-            event.get("event_type"),
-            event.get("severity"),
-            event.get("cpu_percent"),
-            event.get("memory_percent"),
-            event.get("api_latency_ms"),
-            json.dumps({
-                "validation_errors": errors,
-                "payload": event,
-                "metadata": event.get("metadata") if isinstance(event, dict) else None,
-            }),
-            utc_now_string(),
+            event.get("event_id", str(uuid.uuid4())),
+            event["timestamp"],
+            event["server_id"],
+            event["event_type"],
+            event.get("severity", ""),
+            event.get("region", ""),
+            json.dumps(event.get("metadata", {})),
+            "|".join(errors),
         ))
     cursor.executemany(sql, data)
 
 
 def process_messages() -> int:
-    """Consume Kafka messages, validate them, and write incidents to Snowflake in batches."""
+    """Main message processing loop with batching."""
     consumer = create_consumer()
     snowflake_connection = create_snowflake_connection()
     cursor = snowflake_connection.cursor()
@@ -230,13 +216,6 @@ def process_messages() -> int:
     total_events_processed = 0
     total_valid = 0
     total_invalid = 0
-
-    logger.info(
-        "Consumer started: topic=%s group=%s bootstrap_servers=%s",
-        KAFKA_TOPIC,
-        KAFKA_CONSUMER_GROUP,
-        KAFKA_BOOTSTRAP_SERVERS,
-    )
 
     try:
         while not shutdown_requested:
@@ -263,10 +242,8 @@ def process_messages() -> int:
                     is_valid, errors = validate_incident(event)
                     if is_valid:
                         valid_buffer.append(event)
-                        total_valid += 1
                     else:
                         invalid_buffer.append((event, errors))
-                        total_invalid += 1
 
                     # Log periodic metrics
                     if total_events_processed % METRICS_EVERY_EVENTS == 0:
@@ -352,64 +329,42 @@ def _flush_buffers(
     valid_count = 0
     invalid_count = 0
 
-    max_retries = RETRY_ATTEMPTS
-    retry_delay = RETRY_BACKOFF_SECONDS
-
-    for attempt in range(1, max_retries + 1):
+    # Process valid events
+    if valid_buffer:
         try:
-            # Process valid events
-            if valid_buffer:
-                insert_valid_incidents_batch(cursor, valid_buffer)
-                valid_count = len(valid_buffer)
-                total_rows += valid_count
-
-            # Process invalid events
-            if invalid_buffer:
-                insert_invalid_incidents_batch(cursor, invalid_buffer)
-                invalid_count = len(invalid_buffer)
-                total_rows += invalid_count
-
-            # If we get here, the inserts succeeded
-            break   # break out of the retry loop
-
+            insert_valid_incidents_batch(cursor, valid_buffer)
+            valid_count = len(valid_buffer)
+            total_rows += valid_count
+            valid_buffer.clear()
         except Exception as exc:
-            logger.exception(
-                "Batch %d: Error inserting events (attempt %d/%s): %s",
-                batch_number,
-                attempt,
-                max_retries,
-                exc,
-            )
+            logger.exception("Batch %d: Error inserting valid events: %s", batch_number, exc)
             conn.rollback()
-            if attempt < max_retries:
-                time.sleep(retry_delay * attempt)
-            else:
-                logger.error(
-                    "Batch %d: All %s attempts failed. Giving up and keeping buffer for next flush.",
-                    batch_number,
-                    max_retries,
-                )
-                # We do not clear the buffer and we do not commit the consumer.
-                # We return without flushing so that the buffer remains and we try again on the next flush.
-                return
+            raise
 
-    # If we succeeded in the inserts, then we commit the transaction and the consumer offsets.
+    # Process invalid events
+    if invalid_buffer:
+        try:
+            insert_invalid_incidents_batch(cursor, invalid_buffer)
+            invalid_count = len(invalid_buffer)
+            total_rows += invalid_count
+            invalid_buffer.clear()
+        except Exception as exc:
+            logger.exception("Batch %d: Error inserting invalid events: %s", batch_number, exc)
+            conn.rollback()
+            raise
+
     insert_duration = time.time() - insert_start
 
+    # Commit transaction and Kafka offsets
     commit_start = time.time()
     try:
         conn.commit()
         consumer.commit()
         commit_duration = time.time() - commit_start
     except Exception as exc:
-        logger.exception(
-            "Batch %d: Failed to commit transaction or offsets: %s",
-            batch_number,
-            exc,
-        )
+        logger.exception("Batch %d: Failed to commit transaction or offsets: %s", batch_number, exc)
         conn.rollback()
-        # We do not clear the buffer so we can try again.
-        return
+        raise
 
     total_duration = time.time() - start_time
     rows_per_sec = total_rows / total_duration if total_duration > 0 else 0
@@ -425,10 +380,6 @@ def _flush_buffers(
         total_duration,
         rows_per_sec,
     )
-
-    # Clear the buffers only after successful commit
-    valid_buffer.clear()
-    invalid_buffer.clear()
 
 
 if __name__ == "__main__":

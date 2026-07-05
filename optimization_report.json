@@ -1,0 +1,57 @@
+{
+  "analysis_date": "2026-07-03",
+  "queries_analyzed": "Last 24 hours of query history from ACCOUNT_USAGE.QUERY_HISTORY",
+  "recommended_materialized_views": [
+    {
+      "name": "MV_EVENT_COUNT_BY_SEVERITY_24H",
+      "description": "Last 24h event count by severity",
+      "refresh_frequency": "Automatic (materialized view)"
+    },
+    {
+      "name": "MV_AVG_CPU_BY_SERVER_7D",
+      "description": "Last 7d average CPU% by server",
+      "refresh_frequency": "Automatic (materialized view)"
+    },
+    {
+      "name": "MV_INCIDENT_SUMMARY_24H",
+      "description": "Last 24h incident summary (count, avg latency, by server)",
+      "refresh_frequency": "Automatic (materialized view)"
+    },
+    {
+      "name": "MV_TOP_10_SERVERS_30D",
+      "description": "Last 30d top 10 servers by incident count",
+      "refresh_frequency": "Automatic (materialized view)"
+    },
+    {
+      "name": "MV_PIPELINE_HEALTH",
+      "description": "Pipeline health (placeholder for Kafka lag, validation status, dbt health)",
+      "refresh_frequency": "Automatic (materialized view)",
+      "note": "Requires integration with external monitoring tables"
+    }
+  ],
+  "recommended_clustering_changes": [
+    {
+      "table": "FCT_INCIDENTS_V1",
+      "current_clustering_key": "Unknown (check via SHOW TABLES)",
+      "recommended_clustering_key": "DATE_TRUNC('HOUR', TIMESTAMP), SERVER_ID, SEVERITY, EVENT_TYPE",
+      "action": "ALTER TABLE FCT_INCIDENTS_V1 CLUSTER BY (DATE_TRUNC('HOUR', TIMESTAMP), SERVER_ID, SEVERITY, EVENT_TYPE)"
+    },
+    {
+      "table": "FCT_METRICS_V1",
+      "current_clustering_key": "Unknown (check via SHOW TABLES)",
+      "recommended_clustering_key": "SERVER_ID, DATE_TRUNC('HOUR', TIMESTAMP)",
+      "action": "ALTER TABLE FCT_METRICS_V1 CLUSTER BY (SERVER_ID, DATE_TRUNC('HOUR', TIMESTAMP))"
+    },
+    {
+      "table": "DIM_SERVERS",
+      "current_clustering_key": "Unknown (check via SHOW TABLES)",
+      "recommended_clustering_key": "SERVER_ID",
+      "action": "ALTER TABLE DIM_SERVERS CLUSTER BY (SERVER_ID)"
+    }
+  ],
+  "notes": [
+    "The clustering keys are chosen based on common query patterns: filtering by time ranges and grouping by server_id, severity, and event_type.",
+    "Materialized views are automatically maintained by Snowflake and will refresh as the underlying data changes.",
+    "For the pipeline health view, consider creating a table that is populated by a separate process that collects metrics from Kafka, validation logs, and dbt run history."
+  ]
+}

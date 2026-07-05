@@ -1,50 +1,50 @@
 {
-  "expectation_suite_name": "fct_incidents.validation_suite",
+  "expectation_suite_name": "fct_incidents_v1.validation_suite",
   "data_asset_type": "snowflake_table",
   "database": "incident_warehouse",
   "schema": "analytics",
-  "table": "fct_incidents",
+  "table": "fct_incidents_v1",
   "output_format": "json",
   "expectations": [
     {
       "name": "daily_row_count_gt_1m",
       "description": "Every event_date partition contains more than 1M incident rows.",
-      "sql": "select count(*) as failed_count from (select event_date, count(*) as row_count from incident_warehouse.analytics.fct_incidents group by event_date having count(*) <= 1000000)"
+      "sql": "select count(*) as failed_count from (select event_date, count(*) as row_count from incident_warehouse.analytics.fct_incidents_v1 group by event_date having count(*) <= 1000000)"
     },
     {
       "name": "incident_id_no_duplicates_no_nulls",
       "description": "incident_id is present and unique across fct_incidents.",
-      "sql": "select count(*) as failed_count from (select incident_id from incident_warehouse.analytics.fct_incidents where incident_id is null union all select incident_id from incident_warehouse.analytics.fct_incidents group by incident_id having count(*) > 1)"
+      "sql": "select count(*) as failed_count from (select incident_id from incident_warehouse.analytics.fct_incidents_v1 where incident_id is null union all select incident_id from incident_warehouse.analytics.fct_incidents_v1 group by incident_id having count(*) > 1)"
     },
     {
       "name": "timestamp_last_48_hours_only",
       "description": "event_date is constrained to the last 48 hours in UTC.",
-      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents where event_date < dateadd(hour, -48, current_timestamp())::date or event_date > current_date()"
+      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents_v1 where event_date < dateadd(hour, -48, current_timestamp())::date or event_date > current_date()"
     },
     {
       "name": "severity_allowed_values",
       "description": "severity contains only INFO, WARNING, or CRITICAL.",
-      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents where severity is null or severity not in ('INFO', 'WARNING', 'CRITICAL')"
+      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents_v1 where severity is null or severity not in ('INFO', 'WARNING', 'CRITICAL')"
     },
     {
       "name": "region_allowed_values",
       "description": "region_key resolves to Bangalore, Singapore, or Tokyo.",
-      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents f left join incident_warehouse.analytics.dim_regions r on f.region_key = r.region_id where r.region_name is null or r.region_name not in ('Bangalore', 'Singapore', 'Tokyo')"
+      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents_v1 f left join incident_warehouse.analytics.dim_regions_v1 r on f.region_key = r.region_id where r.region_name is null or r.region_name not in ('Bangalore', 'Singapore', 'Tokyo')"
     },
     {
       "name": "cpu_values_between_0_and_100",
       "description": "cpu_percent is null or between 0 and 100 inclusive.",
-      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents where cpu_percent is not null and (cpu_percent < 0 or cpu_percent > 100)"
+      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents_v1 where cpu_percent is not null and (cpu_percent < 0 or cpu_percent > 100)"
     },
     {
       "name": "api_latency_99th_percentile_0_to_5000ms",
       "description": "The 99th percentile of api_latency_ms is between 0 and 5000 milliseconds.",
-      "sql": "select case when coalesce(percentile_cont(0.99) within group (order by api_latency_ms), 0) between 0 and 5000 then 0 else 1 end as failed_count from incident_warehouse.analytics.fct_incidents where api_latency_ms is not null"
+      "sql": "select case when coalesce(percentile_cont(0.99) within group (order by api_latency_ms), 0) between 0 and 5000 then 0 else 1 end as failed_count from incident_warehouse.analytics.fct_incidents_v1 where api_latency_ms is not null"
     },
     {
       "name": "no_rows_with_all_metrics_null",
       "description": "No incident row has all numeric metrics and metric counts null.",
-      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents where cpu_percent is null and memory_percent is null and api_latency_ms is null and cpu_spike_count is null and memory_spike_count is null and api_latency_count is null and auth_failure_count is null"
+      "sql": "select count(*) as failed_count from incident_warehouse.analytics.fct_incidents_v1 where cpu_percent is null and memory_percent is null and api_latency_ms is null and cpu_spike_count is null and memory_spike_count is null and api_latency_count is null and auth_failure_count is null"
     }
   ]
 }

@@ -13,11 +13,11 @@ import random
 import signal
 import sys
 import time
+import os
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Deque
 
-from faker import Faker
 
 # -----------------------------------------------------------------------------
 # Configuration
@@ -30,7 +30,7 @@ EVENT_DISTRIBUTION_PCT = {
     "auth_failure": 15,
     "db_error": 15,
 }
-EVENTS_PER_HOUR = 125_000
+EVENTS_PER_HOUR = int(os.getenv("EVENTS_PER_HOUR", "125000")) * 2
 RUN_HOURS = 8
 PRINT_EVERY_EVENTS = 10_000
 SERVER_COUNTS = {
@@ -54,9 +54,17 @@ REQUIRED_FIELDS = {
     "metadata",
 }
 
-fake = Faker()
 shutdown_requested = False
 pending_correlations: Deque[dict[str, Any]] = deque()
+
+def fake_user_name() -> str:
+    """Generate a random username."""
+    return "".join(random.choices("abcdefghijklmnopqrstuvwxyz", k=8))
+
+def fake_ipv4_public() -> str:
+    """Generate a random IPv4 address."""
+    return ".".join(str(random.randint(0, 255)) for _ in range(4))
+
 
 
 def request_shutdown(signum: int, _frame: Any) -> None:
@@ -149,8 +157,8 @@ def generate_auth_failure(now: datetime) -> dict[str, Any]:
     event.update(
         severity="CRITICAL" if attempts >= 20 else "WARNING" if attempts >= 5 else "INFO",
         failed_attempts=attempts,
-        user_id=fake.user_name(),
-        source_ip=fake.ipv4_public(),
+        user_id=fake_user_name(),
+        source_ip=fake_ipv4_public(),
         metadata={"reason": random.choice(["bad_password", "expired_token", "mfa_failed", "locked_account"])},
     )
     return event

@@ -72,32 +72,13 @@ services:
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC: raw_incidents
-      EVENTS_PER_HOUR: ${EVENTS_PER_HOUR:-125000}
+      EVENTS_PER_HOUR: ${EVENTS_PER_HOUR:-1080000}
       RUNTIME_HOURS: ${RUNTIME_HOURS:-8}
     command:
       - /bin/sh
       - -c
       - |
-        python -u producer/log_generator.py 2>>/app/logs/log-generator.err | python -u -c '
-        import json
-        import os
-        import sys
-        from kafka import KafkaProducer
-
-        producer = KafkaProducer(
-            bootstrap_servers=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "kafka:9092").split(","),
-            value_serializer=lambda value: json.dumps(value, separators=(",", ":")).encode("utf-8"),
-            linger_ms=50,
-            retries=5,
-        )
-        topic = os.getenv("KAFKA_TOPIC", "raw_incidents")
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-            producer.send(topic, json.loads(line))
-        producer.flush()
-        '
+        python -u producer/log_generator.py 2>>/app/logs/log-generator.err | python -u producer/kafka_bridge.py
     volumes:
       - smartops_logs:/app/logs
       - vector_db:/vector_db

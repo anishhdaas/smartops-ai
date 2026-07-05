@@ -1,7 +1,7 @@
 {{--
-  Fact table for incidents.
-  Contains one row per incident with all relevant details.
-  Incremental on (incident_id, timestamp) to avoid duplicates.
+  Staging model for raw events.
+  Cleans and prepares the raw event data for downstream models.
+  Incremental on (incident_id, timestamp) to avoid reprocessing the same event.
 --}}
 {{ config(
     materialized='incremental',
@@ -22,7 +22,7 @@ select
     api_latency_ms,
     metadata,
     ingested_at
-from {{ ref('stg_events') }}
+from {{ source('raw', 'incidents') }}
 
 {% if is_incremental() %}
   where (incident_id, timestamp) not in (select incident_id, timestamp from {{ this }})
