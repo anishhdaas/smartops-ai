@@ -176,17 +176,28 @@ def utc_now_string() -> str:
 
 
 def insert_valid_incidents_batch(cursor: Any, events: List[Dict[str, Any]]) -> None:
-    """Insert a batch of valid incidents into Snowflake using executemany."""
+    """Insert a batch of valid incidents into Snowflake using multi-row insert with SELECT."""
     if not events:
         return
-    sql = f"""
-        INSERT INTO {VALID_INCIDENT_TABLE}
-            (timestamp, server_id, region, event_type, severity, cpu_percent, memory_percent, api_latency_ms, metadata, ingested_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s)
-    """
-    data = []
+    # Build a multi-row INSERT using UNION ALL with PARSE_JSON for VARIANT column
+    # Each row uses a SELECT with PARSE_JSON to properly convert JSON string to VARIANT
+    rows = []
+    params = []
     for event in events:
-        data.append((
+        rows.append("""
+            SELECT
+                %s as timestamp,
+                %s as server_id,
+                %s as region,
+                %s as event_type,
+                %s as severity,
+                %s as cpu_percent,
+                %s as memory_percent,
+                %s as api_latency_ms,
+                PARSE_JSON(%s) as metadata,
+                %s as ingested_at
+        """)
+        params.extend([
             event["timestamp"],
             event["server_id"],
             event["region"],
@@ -197,22 +208,37 @@ def insert_valid_incidents_batch(cursor: Any, events: List[Dict[str, Any]]) -> N
             event.get("api_latency_ms"),
             json.dumps(event.get("metadata") or {}),
             utc_now_string(),
-        ))
-    cursor.executemany(sql, data)
+        ])
+    sql = f"""
+        INSERT INTO {VALID_INCIDENT_TABLE}
+            (timestamp, server_id, region, event_type, severity, cpu_percent, memory_percent, api_latency_ms, metadata, ingested_at)
+        {' UNION ALL '.join(rows)}
+    """
+    cursor.execute(sql, params)
 
 
 def insert_invalid_incidents_batch(cursor: Any, events: List[Tuple[Dict[str, Any], List[str]]]) -> None:
-    """Insert a batch of invalid incidents into Snowflake using executemany."""
+    """Insert a batch of invalid incidents into Snowflake using multi-row insert with SELECT."""
     if not events:
         return
-    sql = f"""
-        INSERT INTO {INVALID_INCIDENT_TABLE}
-            (timestamp, server_id, region, event_type, severity, cpu_percent, memory_percent, api_latency_ms, metadata, ingested_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, PARSE_JSON(%s), %s)
-    """
-    data = []
+    # Build a multi-row INSERT using UNION ALL with PARSE_JSON for VARIANT column
+    rows = []
+    params = []
     for event, errors in events:
-        data.append((
+        rows.append("""
+            SELECT
+                %s as timestamp,
+                %s as server_id,
+                %s as region,
+                %s as event_type,
+                %s as severity,
+                %s as cpu_percent,
+                %s as memory_percent,
+                %s as api_latency_ms,
+                PARSE_JSON(%s) as metadata,
+                %s as ingested_at
+        """)
+        params.extend([
             event.get("timestamp"),
             event.get("server_id"),
             event.get("region"),
@@ -227,8 +253,13 @@ def insert_invalid_incidents_batch(cursor: Any, events: List[Tuple[Dict[str, Any
                 "metadata": event.get("metadata") if isinstance(event, dict) else None,
             }),
             utc_now_string(),
-        ))
-    cursor.executemany(sql, data)
+        ])
+    sql = f"""
+        INSERT INTO {INVALID_INCIDENT_TABLE}
+            (timestamp, server_id, region, event_type, severity, cpu_percent, memory_percent, api_latency_ms, metadata, ingested_at)
+        {' UNION ALL '.join(rows)}
+    """
+    cursor.execute(sql, params)
 
 
 def process_messages() -> int:
