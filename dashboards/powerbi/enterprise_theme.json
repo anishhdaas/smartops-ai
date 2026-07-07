@@ -1,0 +1,48 @@
+{
+  "name": "SmartOps AI Enterprise Dark",
+  "dataColors": [
+    "#00B7C3",
+    "#FFB900",
+    "#FF6666",
+    "#9B59B6",
+    "#28B463",
+    "#F39C12",
+    "#3498DB",
+    "#E74C3C",
+    "#8E44AD",
+    "#2ECC71",
+    "#E67E22",
+    "#1ABC9C"
+  ],
+  "background": "#1B1B1B",
+  "foreground": "#FFFFFF",
+  "tableAccent": "#00B7C3",
+  "visualStyles": {
+    "*": {
+      "titleText": {
+        "color": "#FFFFFF",
+        "fontFamily": "Segoe UI",
+        "fontSize": 12,
+        "fontWeight": "bold"
+      },
+      "legend": {
+        "labelColor": "#CCCCCC",
+        "titleColor": "#FFFFFF"
+      },
+      "labels": {
+        "color": "#CCCCCC"
+      },
+      "grid": {
+        "lineColor": "#333333"
+      }
+    },
+    "card": {
+      "*": {
+        "categoryLabels": [{"fontSize":13,"color":"#A19F9D"}],
+        "valuesLabels": [{"fontSize":28,"color":"#F3F2F1","fontWeight":"700"}],
+        "background": [{"color":"#201F1E"}],
+        "border": [{"color":"#3B3A39","radius":10}]
+      }
+    }
+  }
+}

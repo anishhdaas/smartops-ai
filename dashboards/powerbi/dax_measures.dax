@@ -1,0 +1,38 @@
+DEFINE
+// Total Incidents
+MEASURE 'SmartOps'[Total Incidents] = COUNTROWS('Incidents')
+
+// Critical Incidents
+MEASURE 'SmartOps'[Critical Incidents] = CALCULATE(COUNTROWS('Incidents'), 'Incidents'[Severity] = "Critical")
+
+// Critical Incident %
+MEASURE 'SmartOps'[Critical Incident %] = DIVIDE([Critical Incidents], [Total Incidents])
+
+// Avg CPU %
+MEASURE 'SmartOps'[Avg CPU %] = AVERAGE('Metrics'[CPU_Usage])
+
+// Avg Memory %
+MEASURE 'SmartOps'[Avg Memory %] = AVERAGE('Metrics'[Memory_Usage])
+
+// Avg API Latency
+MEASURE 'SmartOps'[Avg API Latency] = AVERAGE('Metrics'[API_Latency])
+
+// Incident Growth %
+MEASURE 'SmartOps'[Incident Growth %] =
+    VAR PrevPeriod = CALCULATE([Total Incidents], DATEADD('Calendar'[Date], -30, DAY))
+    RETURN DIVIDE([Total Incidents] - PrevPeriod, PrevPeriod)
+
+// Incidents Today
+MEASURE 'SmartOps'[Incidents Today] =
+    CALCULATE([Total Incidents], FILTER('Incidents', 'Incidents'[Date] = TODAY()))
+
+// Last 24 Hours
+MEASURE 'SmartOps'[Last 24 Hours] =
+    CALCULATE([Total Incidents], FILTER('Incidents', 'Incidents'[Date] >= TODAY() - 1))
+
+// Total Servers
+MEASURE 'SmartOps'[Total Servers] = COUNTROWS('Servers')
+
+// Health Score (custom composite)
+MEASURE 'SmartOps'[Health Score] =
+    (1 - [Critical Incident %]) * 0.5 + (1 - [Avg CPU %]/100) * 0.2 + (1 - [Avg Memory %]/100) * 0.2 + (1 - [Avg API Latency]/1000) * 0.1
