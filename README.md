@@ -2,9 +2,12 @@
 
 ---
 
-![Architecture Diagram – placeholder](docs/architecture-diagram.png)
+## Architecture Diagram
 
-**SmartOps AI** is a production‑grade data‑engineering and AI‑operations showcase that simulates, streams, validates, enriches, and analyzes **> 1 M synthetic infrastructure events**.  It demonstrates a modern analytics stack built entirely with open‑source and cloud‑native technologies, making it a **resume‑ready proof‑of‑concept** for senior data‑engineering, analytics‑engineering, and AI‑platform roles at top‑tier tech firms (BCG X, Uber, Netflix, Google, Amazon, Snowflake).
+Architecture diagram will be added in a future update.
+The complete architecture is already documented in docs/ARCHITECTURE.md.
+
+**SmartOps AI** is a production‑grade data engineering and AI operations showcase that simulates, streams, validates, enriches and analyzes over 1 million synthetic infrastructure events. It demonstrates a modern analytics stack built using cloud‑native technologies and production engineering practices for real‑time streaming analytics, AI‑assisted incident intelligence and enterprise data warehousing.
 
 ---
 
@@ -45,7 +48,7 @@ Enterprises that run large‑scale cloud infrastructure need to **detect, diagno
                                       |                                            |
                                       v                                            v
                                +--------------+                         +-----------------+
-                               | Power BI     |   ←  (manual) →        | OpenRouter LLM |
+                               | Power BI     |   ←  (manual) →        | LLM provider   |
                                | Dashboard    |                         +-----------------+
                                +--------------+
 ```
@@ -57,7 +60,7 @@ Enterprises that run large‑scale cloud infrastructure need to **detect, diagno
 2. **Streaming Validation** – `consumer.py` reads from Kafka, validates each record, and writes **valid** and **invalid** rows to **Snowflake** tables.
 3. **ELT with dbt** – dbt models (`staging/`, `marts/`) transform raw tables into analytics‑ready views.
 4. **Data Quality Assurance** – **Great Expectations** runs automated suites against the warehouse nightly.
-5. **Semantic Search & RAG** – Incident embeddings are stored in **Pinecone**; the **MCP** server exposes a JSON‑API that performs context‑aware retrieval‑augmented generation using **OpenRouter** (`qwen/qwen3‑32b:free`).
+5. **Semantic Search & RAG** – Incident embeddings are stored in **Pinecone**; the **MCP** server exposes a JSON‑API that performs context‑aware retrieval‑augmented generation using an LLM provider.
 6. **BI Visualization** – Engineers connect **Power BI** to Snowflake to explore KPIs (throughput, error rates, incident resolution time, etc.).
 
 ---
@@ -100,7 +103,7 @@ smartops-ai/
 - **Python 3.11+**
 - **Snowflake account** (or use the Docker‑based mock).
 - **Pinecone account & index** (configured for integrated embeddings).
-- **OpenRouter API key** (LLM inference).
+- **LLM provider API key** (for inference).
 - **Power BI Desktop** (for the final dashboard).
 
 ### 1. Clone & Initialise
@@ -153,15 +156,16 @@ pytest -q
 
 ---
 
-## ✨ Technical Highlights (Recruiter‑Friendly)
+## Technical Highlights
+
 | Feature | Technology | Why it matters |
 | ------- | ---------- | --------------- |
-| **Scalable streaming** | **Kafka** (zookeeper coordination) | Handles > 1 M events/sec with exactly‑once semantics |
+| **Scalable streaming** | **Kafka** (zookeeper coordination) | Handles high‑volume event ingestion with exactly‑once semantics |
 | **Cloud‑native warehouse** | **Snowflake** (auto‑scaling compute) | Near‑instant ELT, separation of storage & compute |
 | **ELT framework** | **dbt** (SQL‑first transformations) | Version‑controlled, testable data models (`dim_`, `fct_` mart layers) |
 | **Data‑quality automation** | **Great Expectations** | Guarantees SLA‑grade data fidelity before analytics |
 | **Semantic search** | **Pinecone** + **RAG** | Fast vector‑based incident retrieval for LLM assistant |
-| **LLM orchestration** | **MCP server** + **OpenRouter** (`qwen/qwen3‑32b:free`) | Provides a uniform tool‑interface for AI‑assisted troubleshooting |
+| **LLM orchestration** | **MCP server** + **LLM provider** | Provides a uniform tool‑interface for AI‑assisted troubleshooting |
 | **Containerisation** | **Docker** + **Docker‑Compose** | One‑command reproducible environment for dev, CI, and demos |
 | **CI/CD** | **GitHub Actions** (lint, test, dbt, Docker build) | Enforces code quality and zero‑downtime releases |
 | **Visualization** | **Power BI** | Enterprise‑grade dashboards for executive reporting |
@@ -170,29 +174,33 @@ pytest -q
 
 ---
 
-## 📊 Metrics & Impact (What recruiters love)
-- **Throughput:** ~ 1.2 M events ingested per run (≈ 150 k msg/s) with **≤ 30 ms** end‑to‑end latency from producer to Snowflake.
-- **Data‑quality pass rate:** 99.7 % of records pass Great Expectations checks; failures are automatically routed to a dead‑letter queue.
-- **RAG latency:** average 450 ms per incident query (including vector search + LLM inference).
-- **CI pipeline time:** ≈ 3 minutes on GitHub Actions (parallel lint, unit tests, dbt, Docker build).
-- **Business insight:** KPIs such as **Mean Time to Detect (MTTD)** and **Mean Time to Resolve (MTTR)** are computed nightly and visualized in Power BI for executive dashboards.
+## Metrics & Impact
+
+- 1M+ synthetic infrastructure events processed
+- Kafka → Snowflake streaming pipeline
+- 8+ dimensional dbt models
+- 5 interactive Power BI dashboards
+- 3 analytical warehouse tables
+- MCP‑powered RAG assistant using Pinecone and LLM provider
+- Automated data quality validation using Great Expectations
+- GitHub Actions CI/CD pipeline
+- Dockerized multi‑service deployment
 
 ---
 
-## 🎯 Resume‑Ready Achievements (Copy‑Paste for your CV)
-```
-• Designed & delivered an end‑to‑end AI‑Ops platform processing >1 M synthetic events using Kafka, Snowflake, dbt, and Great Expectations.
-• Implemented a Retrieval‑Augmented Generation service (MCP + Pinecone) that answered incident‑level queries with <500 ms latency.
-• Automated CI/CD with GitHub Actions, achieving <3 min full‑pipeline validation on every PR.
-• Built a production‑grade Power BI dashboard showcasing real‑time incident KPIs, adopted by the portfolio demo.
-```
+## Achievements
+
+- Built an end‑to‑end streaming analytics platform processing over 1M synthetic infrastructure events using Kafka, Snowflake, dbt and Python.
+- Engineered dimensional warehouse models and five enterprise Power BI dashboards for executive, infrastructure, AI incident intelligence, warehouse and data quality reporting.
+- Integrated MCP, Pinecone and an LLM provider to enable Retrieval‑Augmented Generation for natural‑language incident investigation.
+- Automated validation, testing and deployment using Great Expectations, Docker and GitHub Actions.
 
 ---
 
 ## 🚀 Future Improvements
 - **Real‑world data ingestion** – integrate actual CloudTrail / Azure Monitor streams.
 - **Serverless deployment** – move Kafka to Confluent Cloud and Snowflake to Snowpipe for zero‑ops scaling.
-- **Multi‑model LLM support** – add Anthropic and OpenAI providers behind a unified MCP façade.
+- **Multi‑model LLM support** – add additional providers behind a unified MCP façade.
 - **Automated dashboard generation** – use Power BI REST API to publish dashboards programmatically.
 - **Observability** – add OpenTelemetry tracing across Kafka → Snowflake → RAG pipeline.
 
@@ -212,4 +220,4 @@ This project is licensed under the **MIT License** – see `LICENSE` for details
 
 ---
 
-*Prepared for recruiters at BCG X, Uber, Netflix, Google, Amazon, Snowflake – showcasing a modern, production‑ready data‑engineering stack that delivers real business value.*
+*Prepared for public portfolio showcase.*
