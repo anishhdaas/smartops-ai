@@ -14,3 +14,10 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Virtual Machines
+VM/
+*.vdi
+*.vbox
+*.vbox-prev
+VBox.log
